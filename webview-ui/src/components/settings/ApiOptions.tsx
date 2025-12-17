@@ -8,7 +8,6 @@ import {
 	type ProviderName,
 	type ProviderSettings,
 	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
-	acpDefaultModelId,
 	openRouterDefaultModelId,
 	requestyDefaultModelId,
 	unboundDefaultModelId,

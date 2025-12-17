@@ -57,7 +57,7 @@ export class AcpHandler implements ApiHandler {
 
 		// Ensure we have a connected client
 		if (!this.client || !this.client.isReady()) {
-			yield* this.connectAndCreateSession()
+			await this.connectAndCreateSession()
 		}
 
 		if (!this.client || !this.sessionId) {
@@ -232,7 +232,7 @@ export class AcpHandler implements ApiHandler {
 
 	// Private methods
 
-	private async *connectAndCreateSession(): AsyncGenerator<never, void, unknown> {
+	private async connectAndCreateSession(): Promise<void> {
 		// Build client config from options
 		const config = this.buildClientConfig()
 		const handlers = this.buildClientHandlers()
@@ -421,7 +421,7 @@ export class AcpHandler implements ApiHandler {
 				break
 
 			case "tool_call":
-			case "tool_call_update":
+			case "tool_call_update": {
 				// Emit tool call information as text
 				const toolUpdate = update as AcpSessionUpdate & {
 					sessionUpdate: "tool_call" | "tool_call_update"
@@ -433,6 +433,7 @@ export class AcpHandler implements ApiHandler {
 					return { type: "text", data: `\n[Tool: ${toolUpdate.title}]\n` }
 				}
 				break
+			}
 
 			case "plan":
 				// Could emit plan updates if needed

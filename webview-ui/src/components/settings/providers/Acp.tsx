@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react"
 import { VSCodeTextField, VSCodeDropdown, VSCodeOption, VSCodeCheckbox } from "@vscode/webview-ui-toolkit/react"
-import { type ProviderSettings, type AcpTransportType, acpTransportTypes } from "@roo-code/types"
+import { type ProviderSettings, type AcpTransportType } from "@roo-code/types"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 
 interface AcpProps {
