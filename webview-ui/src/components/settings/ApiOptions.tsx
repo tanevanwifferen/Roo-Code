@@ -8,6 +8,7 @@ import {
 	type ProviderName,
 	type ProviderSettings,
 	DEFAULT_CONSECUTIVE_MISTAKE_LIMIT,
+	acpDefaultModelId,
 	openRouterDefaultModelId,
 	requestyDefaultModelId,
 	unboundDefaultModelId,
@@ -66,6 +67,7 @@ import {
 } from "@src/components/ui"
 
 import {
+	Acp,
 	Anthropic,
 	Baseten,
 	Bedrock,
@@ -552,6 +554,10 @@ const ApiOptions = ({
 					modelValidationError={modelValidationError}
 					simplifySettings={fromWelcomeView}
 				/>
+			)}
+
+			{selectedProvider === "acp" && (
+				<Acp apiConfiguration={apiConfiguration} setApiConfigurationField={setApiConfigurationField} />
 			)}
 
 			{selectedProvider === "anthropic" && (

@@ -3,6 +3,7 @@ import { z } from "zod"
 import { modelInfoSchema, reasoningEffortSettingSchema, verbosityLevelsSchema, serviceTierSchema } from "./model.js"
 import { codebaseIndexProviderSchema } from "./codebase-index.js"
 import {
+	acpModels,
 	anthropicModels,
 	basetenModels,
 	bedrockModels,
@@ -118,6 +119,7 @@ export const providerNames = [
 	...internalProviders,
 	...customProviders,
 	...fauxProviders,
+	"acp",
 	"anthropic",
 	"bedrock",
 	"baseten",
@@ -201,6 +203,26 @@ const anthropicSchema = apiModelIdProviderModelSchema.extend({
 })
 
 const claudeCodeSchema = apiModelIdProviderModelSchema.extend({})
+
+// ACP (Agent Communication Protocol) provider
+export const acpTransportTypeSchema = z.enum(["stdio", "websocket", "tcp"])
+
+const acpSchema = baseProviderSettingsSchema.extend({
+	acpTransportType: acpTransportTypeSchema.optional(),
+	// stdio transport options
+	acpCommand: z.string().optional(),
+	acpArgs: z.array(z.string()).optional(),
+	acpEnv: z.record(z.string(), z.string()).optional(),
+	// websocket/tcp transport options
+	acpHost: z.string().optional(),
+	acpPort: z.number().int().min(1).max(65535).optional(),
+	// connection options
+	acpTimeout: z.number().int().min(1000).optional(),
+	acpReconnect: z.boolean().optional(),
+	acpMaxReconnectAttempts: z.number().int().min(0).optional(),
+	acpHeartbeatInterval: z.number().int().min(1000).optional(),
+	acpAuthMethod: z.string().optional(),
+})
 
 const openRouterSchema = baseProviderSettingsSchema.extend({
 	openRouterApiKey: z.string().optional(),
@@ -427,6 +449,7 @@ const defaultSchema = z.object({
 })
 
 export const providerSettingsSchemaDiscriminated = z.discriminatedUnion("apiProvider", [
+	acpSchema.merge(z.object({ apiProvider: z.literal("acp") })),
 	anthropicSchema.merge(z.object({ apiProvider: z.literal("anthropic") })),
 	claudeCodeSchema.merge(z.object({ apiProvider: z.literal("claude-code") })),
 	openRouterSchema.merge(z.object({ apiProvider: z.literal("openrouter") })),
@@ -469,6 +492,7 @@ export const providerSettingsSchemaDiscriminated = z.discriminatedUnion("apiProv
 
 export const providerSettingsSchema = z.object({
 	apiProvider: providerNamesSchema.optional(),
+	...acpSchema.shape,
 	...anthropicSchema.shape,
 	...claudeCodeSchema.shape,
 	...openRouterSchema.shape,
@@ -558,6 +582,7 @@ export const isTypicalProvider = (key: unknown): key is TypicalProvider =>
 	isProviderName(key) && !isInternalProvider(key) && !isCustomProvider(key) && !isFauxProvider(key)
 
 export const modelIdKeysByProvider: Record<TypicalProvider, ModelIdKey> = {
+	acp: "apiModelId",
 	anthropic: "apiModelId",
 	"claude-code": "apiModelId",
 	openrouter: "openRouterModelId",
@@ -630,6 +655,11 @@ export const MODELS_BY_PROVIDER: Record<
 	Exclude<ProviderName, "fake-ai" | "human-relay" | "gemini-cli" | "openai">,
 	{ id: ProviderName; label: string; models: string[] }
 > = {
+	acp: {
+		id: "acp",
+		label: "ACP Agent",
+		models: Object.keys(acpModels),
+	},
 	anthropic: {
 		id: "anthropic",
 		label: "Anthropic",

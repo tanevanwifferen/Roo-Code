@@ -1,6 +1,7 @@
 import {
 	type ProviderName,
 	type ModelInfo,
+	acpModels,
 	anthropicModels,
 	bedrockModels,
 	cerebrasModels,
@@ -24,6 +25,7 @@ import {
 } from "@roo-code/types"
 
 export const MODELS_BY_PROVIDER: Partial<Record<ProviderName, Record<string, ModelInfo>>> = {
+	acp: acpModels,
 	anthropic: anthropicModels,
 	"claude-code": claudeCodeModels,
 	bedrock: bedrockModels,
@@ -47,6 +49,7 @@ export const MODELS_BY_PROVIDER: Partial<Record<ProviderName, Record<string, Mod
 }
 
 export const PROVIDERS = [
+	{ value: "acp", label: "ACP Agent" },
 	{ value: "openrouter", label: "OpenRouter" },
 	{ value: "deepinfra", label: "DeepInfra" },
 	{ value: "anthropic", label: "Anthropic" },
