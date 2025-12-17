@@ -9,6 +9,7 @@
 import type { Anthropic } from "@anthropic-ai/sdk"
 import * as path from "path"
 import * as fs from "fs"
+import * as crypto from "crypto"
 import * as vscode from "vscode"
 import {
 	acpDefaultModelId,
@@ -36,6 +37,9 @@ export class AcpHandler implements ApiHandler {
 	private currentWorkspacePath: string
 	private inputTokens: number = 0
 	private outputTokens: number = 0
+	private lastMessageCount: number = 0
+	private systemPromptSent: boolean = false
+	private firstNonSystemMessageHash: string | null = null
 
 	constructor(options: ApiHandlerOptions) {
 		this.options = options
@@ -55,20 +59,45 @@ export class AcpHandler implements ApiHandler {
 		this.inputTokens = 0
 		this.outputTokens = 0
 
+		// Detect if chat was reset (fewer messages than before)
+		const chatWasReset = messages.length < this.lastMessageCount
+
+		// Detect if conversation structure changed (boomerang task completion scenario)
+		// This happens when a delegated task completes and returns to parent, causing
+		// the message history to be different even if the count is similar
+		// Only check for structure change if we're not already resetting due to count decrease
+		const needsForceReset = !chatWasReset && this.detectConversationStructureChange(messages)
+
+		if (chatWasReset || needsForceReset) {
+			// Create a new session for the fresh conversation
+			await this.renewSession()
+			// After renewing, update the hash with the new conversation's first message
+			this.updateFirstMessageHash(messages)
+		}
+
 		// Ensure we have a connected client
 		if (!this.client || !this.client.isReady()) {
 			await this.connectAndCreateSession()
+			// Store the first message hash for this new session
+			// (connectAndCreateSession resets tracking, so we need to set it after)
+			this.updateFirstMessageHash(messages)
 		}
 
 		if (!this.client || !this.sessionId) {
 			throw new Error("Failed to connect to ACP agent")
 		}
 
-		// Convert messages to ACP format
-		const prompt = this.convertMessagesToAcpPrompt(systemPrompt, messages)
+		// Only send new messages (not the entire history)
+		const newMessages = this.getNewMessages(systemPrompt, messages)
 
-		// Estimate input tokens from the prompt
-		this.inputTokens = await this.estimateTokens(systemPrompt, messages)
+		// Convert only new messages to ACP format
+		const prompt = this.convertMessagesToAcpPrompt(newMessages.systemPrompt, newMessages.messages)
+
+		// Update the last message count
+		this.lastMessageCount = messages.length
+
+		// Estimate input tokens from the new messages only
+		this.inputTokens = await this.estimateTokens(newMessages.systemPrompt, newMessages.messages)
 
 		// Create a queue for streaming updates
 		const updateQueue: Array<{ type: "text" | "reasoning" | "usage" | "done"; data?: unknown }> = []
@@ -228,9 +257,168 @@ export class AcpHandler implements ApiHandler {
 			this.client = null
 			this.sessionId = null
 		}
+		// Reset tracking variables
+		this.lastMessageCount = 0
+		this.systemPromptSent = false
+		this.firstNonSystemMessageHash = null
 	}
 
 	// Private methods
+
+	/**
+	 * Renew the session (create a new one)
+	 * This is called when the chat is reset to avoid clogging old sessions
+	 */
+	private async renewSession(): Promise<void> {
+		// Cancel the old session if it exists
+		if (this.client && this.sessionId) {
+			try {
+				this.client.cancelSession(this.sessionId)
+			} catch (error) {
+				console.warn("Failed to cancel old session:", error)
+			}
+		}
+
+		// Reset tracking variables
+		this.lastMessageCount = 0
+		this.systemPromptSent = false
+		this.firstNonSystemMessageHash = null
+		this.sessionId = null
+
+		// Create a new session
+		if (this.client && this.client.isReady()) {
+			this.sessionId = await this.client.createSession(this.currentWorkspacePath)
+		} else {
+			// If client is not ready, reconnect
+			await this.connectAndCreateSession()
+		}
+	}
+
+	/**
+	 * Detect if the conversation structure has changed significantly.
+	 * This handles the boomerang task scenario where a delegated task completes
+	 * and returns to the parent, potentially with a different message history
+	 * even if the message count is similar.
+	 *
+	 * Strategy: Hash the first non-system user message to create a stable anchor point.
+	 * If this anchor changes, we know the conversation has been restructured.
+	 */
+	/**
+	 * Update the stored hash of the first user message
+	 */
+	private updateFirstMessageHash(messages: Anthropic.Messages.MessageParam[]): void {
+		if (messages.length === 0) {
+			this.firstNonSystemMessageHash = null
+			return
+		}
+
+		// Find the first user message
+		const firstUserMessage = messages.find((msg) => msg.role === "user")
+
+		if (!firstUserMessage) {
+			this.firstNonSystemMessageHash = null
+			return
+		}
+
+		// Create and store the hash
+		const messageContent = this.serializeMessageContent(firstUserMessage.content)
+		this.firstNonSystemMessageHash = this.hashString(messageContent)
+	}
+
+	/**
+	 * Detect if the conversation structure has changed significantly.
+	 * This handles the boomerang task scenario where a delegated task completes
+	 * and returns to the parent, potentially with a different message history
+	 * even if the message count is similar.
+	 *
+	 * Strategy: Hash the first non-system user message to create a stable anchor point.
+	 * If this anchor changes, we know the conversation has been restructured.
+	 */
+	private detectConversationStructureChange(messages: Anthropic.Messages.MessageParam[]): boolean {
+		if (messages.length === 0) {
+			return false
+		}
+
+		// Find the first user message (skip system messages)
+		const firstUserMessage = messages.find((msg) => msg.role === "user")
+
+		if (!firstUserMessage) {
+			// No user messages yet, no structure change
+			return false
+		}
+
+		// Create a hash of the first user message content
+		const messageContent = this.serializeMessageContent(firstUserMessage.content)
+		const currentHash = this.hashString(messageContent)
+
+		// If we haven't tracked a first message yet, store it and no change detected
+		if (this.firstNonSystemMessageHash === null) {
+			this.firstNonSystemMessageHash = currentHash
+			return false
+		}
+
+		// If the hash changed, the conversation structure has changed
+		if (this.firstNonSystemMessageHash !== currentHash) {
+			console.log(
+				`[ACP Handler] Detected conversation structure change. ` +
+					`Expected hash: ${this.firstNonSystemMessageHash}, Got: ${currentHash}. ` +
+					`This likely indicates a boomerang task completion. Forcing session reset.`,
+			)
+			return true
+		}
+
+		return false
+	}
+
+	/**
+	 * Serialize message content to a stable string representation for hashing
+	 */
+	private serializeMessageContent(content: string | Anthropic.Messages.ContentBlockParam[]): string {
+		if (typeof content === "string") {
+			return content
+		}
+
+		// For array content, serialize to JSON (excluding images for stability)
+		return JSON.stringify(
+			content
+				.filter((block) => block.type === "text")
+				.map((block) => {
+					if (block.type === "text") {
+						return { type: "text", text: block.text }
+					}
+					return block
+				}),
+		)
+	}
+
+	/**
+	 * Create a stable hash from a string
+	 */
+	private hashString(str: string): string {
+		return crypto.createHash("sha256").update(str).digest("hex").substring(0, 16)
+	}
+
+	/**
+	 * Get only the new messages that haven't been sent yet
+	 */
+	private getNewMessages(
+		systemPrompt: string,
+		messages: Anthropic.Messages.MessageParam[],
+	): { systemPrompt: string; messages: Anthropic.Messages.MessageParam[] } {
+		// If this is the first message or system prompt hasn't been sent, include it
+		const includeSystemPrompt = !this.systemPromptSent && systemPrompt
+		if (includeSystemPrompt) {
+			this.systemPromptSent = true
+		}
+
+		// Get only the new messages (those after lastMessageCount)
+		const newMessages = messages.slice(this.lastMessageCount)
+
+		return {
+			systemPrompt: includeSystemPrompt ? systemPrompt : "",
+			messages: newMessages,
+		}
+	}
 
 	private async connectAndCreateSession(): Promise<void> {
 		// Build client config from options
@@ -244,6 +432,11 @@ export class AcpHandler implements ApiHandler {
 
 		// Create session
 		this.sessionId = await this.client.createSession(this.currentWorkspacePath)
+
+		// Reset tracking since this is a new session
+		this.lastMessageCount = 0
+		this.systemPromptSent = false
+		this.firstNonSystemMessageHash = null
 	}
 
 	private buildClientConfig(): AcpClientConfig {
